@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const LeaderboardEntry = require('../models/LeaderboardEntry');
 const Submission = require('../models/Submission');
 const User = require('../models/User');

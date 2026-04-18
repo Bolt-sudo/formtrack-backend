@@ -36,6 +36,12 @@ const submissionSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
+  // ── Stores the Google Drive file URL uploaded by student ──────
+  uploadedFileUrl: {
+    type: String,
+    default: null,
+    trim: true
+  },
   // Track notification history for this submission
   notificationsSent: [{
     type: { type: String, enum: ['reminder', 'warning', 'reward', 'penalty'] },

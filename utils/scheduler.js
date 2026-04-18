@@ -3,6 +3,7 @@ const { google } = require('googleapis');
 const auth = require('../config/googleauth');
 const Form = require('../models/Form');
 const Submission = require('../models/Submission');
+const User = require('../models/User');
 const { sendReminderToStudents, applyMissedPenalties } = require('./notificationService');
 const { computeWeeklyLeaderboard } = require('./leaderboardService');
 
@@ -52,7 +53,6 @@ const startScheduler = () => {
     } catch (err) {
       console.error('[CRON] ❌ Startup leaderboard failed:', err.message);
     }
-    // Run initial sync on startup
     await syncGoogleFormResponses();
   })();
 
@@ -64,12 +64,14 @@ const startScheduler = () => {
   console.log('   • Catch-up     — penalties + leaderboard on every startup');
 };
 
+// Track already-warned keys to avoid log spam
+const warnedKeys = new Set();
+
 const syncGoogleFormResponses = async () => {
   try {
     const authClient = await auth.getClient();
     const formsApi = google.forms({ version: 'v1', auth: authClient });
 
-    // Get all active forms that have a Google Form ID
     const activeForms = await Form.find({
       isActive: true,
       googleFormId: { $exists: true, $ne: null }
@@ -79,7 +81,6 @@ const syncGoogleFormResponses = async () => {
 
     for (const form of activeForms) {
       try {
-        // Fetch all responses from Google Forms API
         const responsesRes = await formsApi.forms.responses.list({
           formId: form.googleFormId
         });
@@ -87,7 +88,6 @@ const syncGoogleFormResponses = async () => {
         const responses = responsesRes.data.responses || [];
         if (responses.length === 0) continue;
 
-        // Get form questions to map questionId -> title
         const formData = await formsApi.forms.get({ formId: form.googleFormId });
         const items = formData.data.items || [];
 
@@ -101,17 +101,28 @@ const syncGoogleFormResponses = async () => {
 
         for (const response of responses) {
           const answers = {};
+          let uploadedFileUrl = null;
           const answerMap = response.answers || {};
 
-          // Convert answers to readable format
           Object.keys(answerMap).forEach(questionId => {
             const questionTitle = questionMap[questionId] || questionId;
             const answerData = answerMap[questionId];
-            const textAnswers = answerData.textAnswers?.answers || [];
-            answers[questionTitle] = textAnswers.map(a => a.value).join(', ');
+
+            // ── Extract file upload URL ───────────────────────
+            if (answerData.fileUploadAnswers) {
+              const fileAnswers = answerData.fileUploadAnswers.answers || [];
+              if (fileAnswers.length > 0) {
+                const fileId = fileAnswers[0].fileId;
+                uploadedFileUrl = `https://drive.google.com/file/d/${fileId}/view`;
+                answers[questionTitle] = uploadedFileUrl;
+              }
+            } else {
+              const textAnswers = answerData.textAnswers?.answers || [];
+              answers[questionTitle] = textAnswers.map(a => a.value).join(', ');
+            }
           });
 
-          // Find Roll Number from answers (check common variations)
+          // Find Roll Number from answers
           const rollNumber = (
             answers['Roll Number'] ||
             answers['Roll No'] ||
@@ -121,42 +132,62 @@ const syncGoogleFormResponses = async () => {
             ''
           ).toString().trim();
 
-          if (!rollNumber) {
-            console.log(`[SYNC] ⚠️ No roll number found in response for form: "${form.title}"`);
+          // Find Name from answers
+          const studentName = (
+            answers['Name'] ||
+            answers['Full Name'] ||
+            answers['Student Name'] ||
+            answers['name'] ||
+            answers['full name'] ||
+            ''
+          ).toString().trim();
+
+          // ── Find student directly from User collection ────────
+          let student = null;
+
+          if (rollNumber) {
+            student = await User.findOne({ rollNumber: rollNumber, role: 'student' });
+          }
+
+          if (!student && studentName) {
+            student = await User.findOne({
+              name: { $regex: new RegExp(`^${studentName}$`, 'i') },
+              role: 'student'
+            });
+          }
+
+          if (!student) {
+            // Only warn once per unique roll+name combo to avoid log spam
+            const warnKey = `${rollNumber}-${studentName}`;
+            if (!warnedKeys.has(warnKey)) {
+              console.log(`[SYNC] ⚠️ No student found - Roll: "${rollNumber}", Name: "${studentName}"`);
+              warnedKeys.add(warnKey);
+            }
             continue;
           }
 
-          // Find submission by matching student roll number
-          const submission = await Submission.findOne({
-            form: form._id
-          }).populate({
-            path: 'student',
-            match: { rollNumber: rollNumber },
-            select: 'rollNumber name'
-          });
+          // ── Find their submission for this form ───────────────
+          const submission = await Submission.findOne({ form: form._id, student: student._id });
 
-          if (!submission || !submission.student) {
-            console.log(`[SYNC] ⚠️ No student found with roll: ${rollNumber}`);
-            continue;
-          }
+          if (!submission) continue;
 
-          // Skip if already synced with same data
+          // Skip if already synced
           if (
             submission.googleFormResponses &&
             Object.keys(submission.googleFormResponses).length > 0
           ) continue;
 
-          // Update submission with Google Form responses
           const submittedTime = new Date(response.lastSubmittedTime);
           const isLate = submittedTime > new Date(form.deadline);
 
           await Submission.findByIdAndUpdate(submission._id, {
             googleFormResponses: answers,
+            uploadedFileUrl: uploadedFileUrl,
             status: isLate ? 'late' : 'submitted',
             submittedAt: submittedTime
           });
 
-          console.log(`[SYNC] ✅ Synced response for roll: ${rollNumber} - "${form.title}"`);
+          console.log(`[SYNC] ✅ Synced - Roll: ${rollNumber}, Name: ${studentName} - "${form.title}" ${uploadedFileUrl ? '📎 File attached' : ''}`);
         }
       } catch (err) {
         console.error(`[SYNC] ❌ Error syncing form "${form.title}":`, err.message);

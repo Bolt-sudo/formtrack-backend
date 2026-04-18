@@ -1,5 +1,7 @@
 const nodemailer = require('nodemailer');
 const Notification = require('../models/Notification');
+const User = require('../models/User');
+const Submission = require('../models/Submission');
 
 const createTransporter = () => {
   return nodemailer.createTransport({
@@ -238,8 +240,7 @@ const sendReminderToStudents = async (form, students, triggerType = 'auto') => {
  * ✅ FIX: Now also creates a missed fine for each student who never submitted.
  */
 const applyMissedPenalties = async (form, students) => {
-  const User = require('../models/User');
-  const Submission = require('../models/Submission');
+  
   const { createMissedFine } = require('./fineService'); // ✅ NEW
 
   const promises = students.map(async (student) => {
