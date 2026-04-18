@@ -1,4 +1,6 @@
 const cron = require('node-cron');
+const { google } = require('googleapis');
+const auth = require('../config/googleauth');
 const Form = require('../models/Form');
 const Submission = require('../models/Submission');
 const { sendReminderToStudents, applyMissedPenalties } = require('./notificationService');
@@ -30,10 +32,12 @@ const startScheduler = () => {
     }
   });
 
+  // ── Google Form response sync: every 30 seconds ──────────────
+  setInterval(async () => {
+    await syncGoogleFormResponses();
+  }, 30 * 1000);
+
   // ── Catch-up job on server start ─────────────────────────────
-  // ✅ Runs once at startup:
-  //    1. Apply missed penalties for any overdue forms (handles server downtime)
-  //    2. Recompute leaderboard for current week (so it's never empty after restart)
   console.log('[CRON] Running catch-up on startup...');
   (async () => {
     try {
@@ -48,13 +52,119 @@ const startScheduler = () => {
     } catch (err) {
       console.error('[CRON] ❌ Startup leaderboard failed:', err.message);
     }
+    // Run initial sync on startup
+    await syncGoogleFormResponses();
   })();
 
   console.log('✅ Cron jobs scheduled:');
   console.log('   • Reminders    — every 1 minute');
   console.log('   • Penalties    — daily at midnight');
   console.log('   • Leaderboard  — every Monday at 12:01 AM');
+  console.log('   • Form Sync    — every 30 seconds');
   console.log('   • Catch-up     — penalties + leaderboard on every startup');
+};
+
+const syncGoogleFormResponses = async () => {
+  try {
+    const authClient = await auth.getClient();
+    const formsApi = google.forms({ version: 'v1', auth: authClient });
+
+    // Get all active forms that have a Google Form ID
+    const activeForms = await Form.find({
+      isActive: true,
+      googleFormId: { $exists: true, $ne: null }
+    });
+
+    if (activeForms.length === 0) return;
+
+    for (const form of activeForms) {
+      try {
+        // Fetch all responses from Google Forms API
+        const responsesRes = await formsApi.forms.responses.list({
+          formId: form.googleFormId
+        });
+
+        const responses = responsesRes.data.responses || [];
+        if (responses.length === 0) continue;
+
+        // Get form questions to map questionId -> title
+        const formData = await formsApi.forms.get({ formId: form.googleFormId });
+        const items = formData.data.items || [];
+
+        // Build questionId -> title map
+        const questionMap = {};
+        items.forEach(item => {
+          if (item.questionItem) {
+            questionMap[item.questionItem.question.questionId] = item.title;
+          }
+        });
+
+        for (const response of responses) {
+          const answers = {};
+          const answerMap = response.answers || {};
+
+          // Convert answers to readable format
+          Object.keys(answerMap).forEach(questionId => {
+            const questionTitle = questionMap[questionId] || questionId;
+            const answerData = answerMap[questionId];
+            const textAnswers = answerData.textAnswers?.answers || [];
+            answers[questionTitle] = textAnswers.map(a => a.value).join(', ');
+          });
+
+          // Find Roll Number from answers (check common variations)
+          const rollNumber = (
+            answers['Roll Number'] ||
+            answers['Roll No'] ||
+            answers['Roll no'] ||
+            answers['roll number'] ||
+            answers['rollnumber'] ||
+            ''
+          ).toString().trim();
+
+          if (!rollNumber) {
+            console.log(`[SYNC] ⚠️ No roll number found in response for form: "${form.title}"`);
+            continue;
+          }
+
+          // Find submission by matching student roll number
+          const submission = await Submission.findOne({
+            form: form._id
+          }).populate({
+            path: 'student',
+            match: { rollNumber: rollNumber },
+            select: 'rollNumber name'
+          });
+
+          if (!submission || !submission.student) {
+            console.log(`[SYNC] ⚠️ No student found with roll: ${rollNumber}`);
+            continue;
+          }
+
+          // Skip if already synced with same data
+          if (
+            submission.googleFormResponses &&
+            Object.keys(submission.googleFormResponses).length > 0
+          ) continue;
+
+          // Update submission with Google Form responses
+          const submittedTime = new Date(response.lastSubmittedTime);
+          const isLate = submittedTime > new Date(form.deadline);
+
+          await Submission.findByIdAndUpdate(submission._id, {
+            googleFormResponses: answers,
+            status: isLate ? 'late' : 'submitted',
+            submittedAt: submittedTime
+          });
+
+          console.log(`[SYNC] ✅ Synced response for roll: ${rollNumber} - "${form.title}"`);
+        }
+      } catch (err) {
+        console.error(`[SYNC] ❌ Error syncing form "${form.title}":`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('[SYNC] ❌ syncGoogleFormResponses error:', err.message);
+  }
 };
 
 const checkDeadlinesAndNotify = async () => {
@@ -97,12 +207,6 @@ const checkDeadlinesAndNotify = async () => {
 const applyMissedDeadlinePenalties = async () => {
   try {
     const now = new Date();
-
-    // ✅ GRACE PERIOD: 1 day after deadline before marking missed.
-    //    Full timeline:
-    //      Before deadline          → student submits → "submitted" (on time) ✅
-    //      After deadline, < 1 day  → student submits → "late" ✅
-    //      After deadline, > 1 day  → cron runs       → "missed" ❌
     const gracePeriodMs = 1 * 24 * 60 * 60 * 1000;
     const cutoff = new Date(now - gracePeriodMs);
 
@@ -129,4 +233,4 @@ const applyMissedDeadlinePenalties = async () => {
   }
 };
 
-module.exports = { startScheduler, checkDeadlinesAndNotify, applyMissedDeadlinePenalties };
+module.exports = { startScheduler, checkDeadlinesAndNotify, applyMissedDeadlinePenalties, syncGoogleFormResponses };

@@ -15,25 +15,16 @@ const auth = require('../config/googleauth');
  *  { type: 'time',     title: 'Your question', required: false }
  */
 
-/**
- * Convert one teacher-defined question into a Google Forms API `createItem` request.
- */
 const buildQuestionRequest = (q, index) => {
   let questionPayload;
 
   switch (q.type) {
     case 'text':
-      questionPayload = {
-        textQuestion: { paragraph: false }
-      };
+      questionPayload = { textQuestion: { paragraph: false } };
       break;
-
     case 'paragraph':
-      questionPayload = {
-        textQuestion: { paragraph: true }
-      };
+      questionPayload = { textQuestion: { paragraph: true } };
       break;
-
     case 'radio':
       questionPayload = {
         choiceQuestion: {
@@ -42,7 +33,6 @@ const buildQuestionRequest = (q, index) => {
         }
       };
       break;
-
     case 'checkbox':
       questionPayload = {
         choiceQuestion: {
@@ -51,7 +41,6 @@ const buildQuestionRequest = (q, index) => {
         }
       };
       break;
-
     case 'dropdown':
       questionPayload = {
         choiceQuestion: {
@@ -60,7 +49,6 @@ const buildQuestionRequest = (q, index) => {
         }
       };
       break;
-
     case 'scale':
       questionPayload = {
         scaleQuestion: {
@@ -71,24 +59,14 @@ const buildQuestionRequest = (q, index) => {
         }
       };
       break;
-
     case 'date':
-      questionPayload = {
-        dateQuestion: { includeTime: false, includeYear: true }
-      };
+      questionPayload = { dateQuestion: { includeTime: false, includeYear: true } };
       break;
-
     case 'time':
-      questionPayload = {
-        timeQuestion: { duration: false }
-      };
+      questionPayload = { timeQuestion: { duration: false } };
       break;
-
     default:
-      // Fallback: treat unknown types as short text
-      questionPayload = {
-        textQuestion: { paragraph: false }
-      };
+      questionPayload = { textQuestion: { paragraph: false } };
   }
 
   return {
@@ -98,7 +76,7 @@ const buildQuestionRequest = (q, index) => {
         ...(q.description ? { description: q.description } : {}),
         questionItem: {
           question: {
-            required: q.required !== false, // default true
+            required: q.required !== false,
             ...questionPayload
           }
         }
@@ -108,30 +86,6 @@ const buildQuestionRequest = (q, index) => {
   };
 };
 
-/**
- * Generate a fully dynamic Google Form.
- *
- * @param {string} formTitle       - Title shown at top of the Google Form
- * @param {string} formDescription - Optional description shown below the title
- * @param {string} teacherName     - Used in the internal document title (Drive)
- * @param {Array}  questions       - Array of question objects (see types above)
- *
- * @returns {{ url: string, id: string }}
- *
- * Example call:
- *   generateCustomForm(
- *     'Internship Status Form',
- *     'Fill this form to update your internship details.',
- *     'Dr. Sharma',
- *     [
- *       { type: 'text',     title: 'Full Name & Roll Number', required: true },
- *       { type: 'text',     title: 'Company Name',            required: true },
- *       { type: 'paragraph',title: 'HR Manager Name & Contact Info', required: true },
- *       { type: 'radio',    title: 'Internship Status', required: true,
- *         options: ['Selected / Joined', 'Interview Scheduled', 'Searching'] }
- *     ]
- *   )
- */
 const generateCustomForm = async (formTitle, formDescription, teacherName, questions = []) => {
   if (!questions.length) {
     throw new Error('At least one question is required to generate a Google Form.');
@@ -140,7 +94,7 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
   const authClient = await auth.getClient();
   const forms = google.forms({ version: 'v1', auth: authClient });
 
-  // Step 1: Create the blank form with just a title
+  // Step 1: Create the blank form with title
   const newForm = await forms.forms.create({
     requestBody: {
       info: {
@@ -152,10 +106,10 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
 
   const formId = newForm.data.formId;
 
-  // Step 2: Build update requests — description + all questions
+  // Step 2: Build update requests
   const requests = [];
 
-  // Optionally set the form description
+  // Set form description if provided
   if (formDescription) {
     requests.push({
       updateFormInfo: {
@@ -165,9 +119,44 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
     });
   }
 
-  // Add each question
+  // ── Auto-add Roll Number as FIRST question (index 0) ──────────
+  // ── Auto-add Name as FIRST question (index 0) ─────────────────
+  requests.push({
+    createItem: {
+      item: {
+        title: 'Name',
+        description: 'Enter your Full Name as registered',
+        questionItem: {
+          question: {
+            required: true,
+            textQuestion: { paragraph: false }
+          }
+        }
+      },
+      location: { index: 0 }
+    }
+  });
+
+  // ── Auto-add Roll Number as SECOND question (index 1) ─────────
+  requests.push({
+    createItem: {
+      item: {
+        title: 'Roll Number',
+        description: 'Enter your Roll Number exactly as registered',
+        questionItem: {
+          question: {
+            required: true,
+            textQuestion: { paragraph: false }
+          }
+        }
+      },
+      location: { index: 1 }
+    }
+  });
+
+  // ── Add teacher's questions starting from index 2 ─────────────
   questions.forEach((q, i) => {
-    requests.push(buildQuestionRequest(q, i));
+    requests.push(buildQuestionRequest(q, i + 2));
   });
 
   await forms.forms.batchUpdate({
@@ -182,8 +171,7 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
 };
 
 /**
- * Keep the old internship function for backward compatibility,
- * but now it delegates to generateCustomForm internally.
+ * Keep the old internship function for backward compatibility.
  */
 const generateInternshipForm = async (teacherName, subject) => {
   return generateCustomForm(
@@ -191,7 +179,6 @@ const generateInternshipForm = async (teacherName, subject) => {
     'Please fill in your internship details accurately.',
     teacherName,
     [
-      { type: 'text',      title: 'Full Name & Roll Number',      required: true },
       { type: 'text',      title: 'Company Name',                  required: true },
       { type: 'paragraph', title: 'HR Manager Name & Contact Info',required: true },
       {
