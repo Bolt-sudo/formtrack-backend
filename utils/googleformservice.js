@@ -1,20 +1,6 @@
 const { google } = require('googleapis');
 const auth = require('../config/googleauth');
 
-/**
- * Supported question types a teacher can pass:
- *
- *  { type: 'text',      title: 'Your question', required: true }
- *  { type: 'paragraph', title: 'Your question', required: true }
- *  { type: 'radio',     title: 'Your question', required: true,  options: ['A','B','C'] }
- *  { type: 'checkbox',  title: 'Your question', required: false, options: ['A','B','C'] }
- *  { type: 'dropdown',  title: 'Your question', required: true,  options: ['A','B','C'] }
- *  { type: 'scale',     title: 'Your question', required: false, low: 1, high: 5 }
- *  { type: 'date',      title: 'Your question', required: false }
- *  { type: 'time',      title: 'Your question', required: false }
- *  { type: 'fileUpload',title: 'Upload Offer Letter', required: false }
- */
-
 const buildQuestionRequest = (q, index) => {
   let questionPayload;
 
@@ -65,16 +51,6 @@ const buildQuestionRequest = (q, index) => {
     case 'time':
       questionPayload = { timeQuestion: { duration: false } };
       break;
-    case 'fileUpload':
-      questionPayload = {
-        fileUploadQuestion: {
-          folderId: '',
-          types: ['ANY'],
-          maxFiles: 1,
-          maxFileSize: '10485760'
-        }
-      };
-      break;
     default:
       questionPayload = { textQuestion: { paragraph: false } };
   }
@@ -101,10 +77,16 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
     throw new Error('At least one question is required to generate a Google Form.');
   }
 
+  // Filter out fileUpload questions
+  questions = questions.filter(q => q.type !== 'fileUpload');
+
+  if (!questions.length) {
+    throw new Error('No valid questions after removing unsupported types.');
+  }
+
   const authClient = await auth.getClient();
   const forms = google.forms({ version: 'v1', auth: authClient });
 
-  // Step 1: Create the blank form with title
   const newForm = await forms.forms.create({
     requestBody: {
       info: {
@@ -115,11 +97,8 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
   });
 
   const formId = newForm.data.formId;
-
-  // Step 2: Build update requests
   const requests = [];
 
-  // Set form description if provided
   if (formDescription) {
     requests.push({
       updateFormInfo: {
@@ -129,7 +108,6 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
     });
   }
 
-  // ── Auto-add Name as FIRST question (index 0) ─────────────────
   requests.push({
     createItem: {
       item: {
@@ -146,7 +124,6 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
     }
   });
 
-  // ── Auto-add Roll Number as SECOND question (index 1) ─────────
   requests.push({
     createItem: {
       item: {
@@ -163,7 +140,6 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
     }
   });
 
-  // ── Add teacher's questions starting from index 2 ─────────────
   questions.forEach((q, i) => {
     requests.push(buildQuestionRequest(q, i + 2));
   });
@@ -192,11 +168,6 @@ const generateInternshipForm = async (teacherName, subject) => {
         title: 'Internship Status',
         required: true,
         options: ['Selected / Joined', 'Interview Scheduled', 'Searching']
-      },
-      {
-        type: 'fileUpload',
-        title: 'Upload Offer Letter (PDF/Image)',
-        required: false
       }
     ]
   );
