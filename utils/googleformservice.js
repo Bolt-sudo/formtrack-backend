@@ -1,29 +1,39 @@
 const { google } = require('googleapis');
 const auth = require('../config/googleauth');
 
+/**
+ * Maps frontend types to Google Forms API structure.
+ * Includes fallbacks for AI-generated types like 'multiple_choice'.
+ */
 const buildQuestionRequest = (q, index) => {
   let questionPayload;
+  const type = (q.type || 'text').toLowerCase();
 
-  switch (q.type) {
+  switch (type) {
     case 'text':
+    case 'short answer':
       questionPayload = { textQuestion: { paragraph: false } };
       break;
     case 'paragraph':
+    case 'long answer':
       questionPayload = { textQuestion: { paragraph: true } };
       break;
     case 'radio':
+    case 'multiple_choice':
+    case 'multiple_choice_question':
       questionPayload = {
         choiceQuestion: {
           type: 'RADIO',
-          options: (q.options || []).map(opt => ({ value: String(opt) }))
+          options: (q.options || ['Option 1']).map(opt => ({ value: String(opt || 'Option') }))
         }
       };
       break;
     case 'checkbox':
+    case 'checkboxes':
       questionPayload = {
         choiceQuestion: {
           type: 'CHECKBOX',
-          options: (q.options || []).map(opt => ({ value: String(opt) }))
+          options: (q.options || ['Option 1']).map(opt => ({ value: String(opt || 'Option') }))
         }
       };
       break;
@@ -31,16 +41,17 @@ const buildQuestionRequest = (q, index) => {
       questionPayload = {
         choiceQuestion: {
           type: 'DROP_DOWN',
-          options: (q.options || []).map(opt => ({ value: String(opt) }))
+          options: (q.options || ['Option 1']).map(opt => ({ value: String(opt || 'Option') }))
         }
       };
       break;
     case 'scale':
+    case 'linear_scale':
       questionPayload = {
         scaleQuestion: {
-          low:       q.low       || 1,
-          high:      q.high      || 5,
-          lowLabel:  q.lowLabel  || '',
+          low: q.low || 1,
+          high: q.high || 5,
+          lowLabel: q.lowLabel || '',
           highLabel: q.highLabel || ''
         }
       };
@@ -72,21 +83,25 @@ const buildQuestionRequest = (q, index) => {
   };
 };
 
+/**
+ * Generates a Google Form based on FormTrack data.
+ */
 const generateCustomForm = async (formTitle, formDescription, teacherName, questions = []) => {
-  if (!questions.length) {
+  if (!questions || !questions.length) {
     throw new Error('At least one question is required to generate a Google Form.');
   }
 
-  // Filter out fileUpload questions
-  questions = questions.filter(q => q.type !== 'fileUpload');
+  // Filter out unsupported types
+  const validQuestions = questions.filter(q => q.type !== 'fileUpload');
 
-  if (!questions.length) {
+  if (!validQuestions.length) {
     throw new Error('No valid questions after removing unsupported types.');
   }
 
   const authClient = await auth.getClient();
   const forms = google.forms({ version: 'v1', auth: authClient });
 
+  // 1. Create the initial Form container
   const newForm = await forms.forms.create({
     requestBody: {
       info: {
@@ -99,6 +114,7 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
   const formId = newForm.data.formId;
   const requests = [];
 
+  // 2. Add description if exists
   if (formDescription) {
     requests.push({
       updateFormInfo: {
@@ -108,6 +124,7 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
     });
   }
 
+  // 3. Inject standard FormTrack identification fields (Name & Roll Number)
   requests.push({
     createItem: {
       item: {
@@ -140,10 +157,12 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
     }
   });
 
-  questions.forEach((q, i) => {
+  // 4. Map and add all user/AI generated questions
+  validQuestions.forEach((q, i) => {
     requests.push(buildQuestionRequest(q, i + 2));
   });
 
+  // 5. Execute batch update to build the form items
   await forms.forms.batchUpdate({
     formId,
     requestBody: { requests }
@@ -155,13 +174,16 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
   };
 };
 
+/**
+ * Pre-defined template for Internship tracking.
+ */
 const generateInternshipForm = async (teacherName, subject) => {
   return generateCustomForm(
     `Internship Status - ${subject}`,
     'Please fill in your internship details accurately.',
     teacherName,
     [
-      { type: 'text',      title: 'Company Name',                   required: true },
+      { type: 'text', title: 'Company Name', required: true },
       { type: 'paragraph', title: 'HR Manager Name & Contact Info', required: true },
       {
         type: 'radio',

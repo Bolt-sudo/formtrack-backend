@@ -53,6 +53,7 @@ app.use('/api/students',      require('./routes/students'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/fines',         require('./routes/fines'));
 app.use('/api/leaderboard',   require('./routes/leaderboard'));
+app.use('/api/ai',            require('./routes/aiRoutes'));  
 
 app.get('/', (req, res) => res.json({ message: 'FormTrack API running', version: '1.0.0' }));
 
