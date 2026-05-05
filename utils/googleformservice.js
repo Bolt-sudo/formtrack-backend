@@ -1,10 +1,6 @@
 const { google } = require('googleapis');
 const auth = require('../config/googleauth');
 
-/**
- * Maps frontend types to Google Forms API structure.
- * Includes fallbacks for AI-generated types like 'multiple_choice'.
- */
 const buildQuestionRequest = (q, index) => {
   let questionPayload;
   const type = (q.type || 'text').toLowerCase();
@@ -83,100 +79,122 @@ const buildQuestionRequest = (q, index) => {
   };
 };
 
-/**
- * Generates a Google Form based on FormTrack data.
- */
 const generateCustomForm = async (formTitle, formDescription, teacherName, questions = []) => {
   if (!questions || !questions.length) {
     throw new Error('At least one question is required to generate a Google Form.');
   }
 
-  // Filter out unsupported types
   const validQuestions = questions.filter(q => q.type !== 'fileUpload');
 
   if (!validQuestions.length) {
     throw new Error('No valid questions after removing unsupported types.');
   }
 
-  const authClient = await auth.getClient();
-  const forms = google.forms({ version: 'v1', auth: authClient });
+  try {
+    const authClient = await auth.getClient();
+    
+    // Force token refresh to ensure valid credentials
+    await authClient.getAccessToken();
+    console.log('✅ Auth client ready, creating form...');
 
-  // 1. Create the initial Form container
-  const newForm = await forms.forms.create({
-    requestBody: {
-      info: {
-        title: formTitle,
-        documentTitle: `${formTitle} (${teacherName})`
-      }
+    const forms = google.forms({ version: 'v1', auth: authClient });
+
+    // 1. Create the form
+    let newForm;
+    try {
+      newForm = await forms.forms.create({
+        requestBody: {
+          info: {
+            title: formTitle,
+            documentTitle: `${formTitle} (${teacherName})`
+          }
+        }
+      });
+      console.log('✅ Form created with ID:', newForm.data.formId);
+    } catch (createErr) {
+      console.error('❌ Form CREATE error:', JSON.stringify(createErr?.response?.data || createErr?.cause || createErr?.message, null, 2));
+      throw new Error('Failed to create form: ' + (createErr?.response?.data?.error?.message || createErr?.cause?.message || createErr.message));
     }
-  });
 
-  const formId = newForm.data.formId;
-  const requests = [];
+    const formId = newForm.data.formId;
+    const requests = [];
 
-  // 2. Add description if exists
-  if (formDescription) {
+    // 2. Add description
+    if (formDescription) {
+      requests.push({
+        updateFormInfo: {
+          info: { description: formDescription },
+          updateMask: 'description'
+        }
+      });
+    }
+
+    // 3. Add Name and Roll Number fields
     requests.push({
-      updateFormInfo: {
-        info: { description: formDescription },
-        updateMask: 'description'
+      createItem: {
+        item: {
+          title: 'Name',
+          description: 'Enter your Full Name as registered',
+          questionItem: {
+            question: {
+              required: true,
+              textQuestion: { paragraph: false }
+            }
+          }
+        },
+        location: { index: 0 }
       }
     });
+
+    requests.push({
+      createItem: {
+        item: {
+          title: 'Roll Number',
+          description: 'Enter your Roll Number exactly as registered',
+          questionItem: {
+            question: {
+              required: true,
+              textQuestion: { paragraph: false }
+            }
+          }
+        },
+        location: { index: 1 }
+      }
+    });
+
+    // 4. Add questions
+    validQuestions.forEach((q, i) => {
+      requests.push(buildQuestionRequest(q, i + 2));
+    });
+
+    // 5. Batch update
+    try {
+      await forms.forms.batchUpdate({
+        formId,
+        requestBody: { requests }
+      });
+      console.log('✅ Form questions added successfully');
+    } catch (updateErr) {
+      console.error('❌ Form BATCH UPDATE error:', JSON.stringify(updateErr?.response?.data || updateErr?.cause || updateErr?.message, null, 2));
+      throw new Error('Failed to add questions: ' + (updateErr?.response?.data?.error?.message || updateErr?.cause?.message || updateErr.message));
+    }
+
+    return {
+      url: `https://docs.google.com/forms/d/${formId}/viewform`,
+      id: formId
+    };
+
+  } catch (err) {
+    console.error('❌ generateCustomForm FULL ERROR:', JSON.stringify({
+      message: err.message,
+      cause: err.cause,
+      responseData: err?.response?.data,
+      status: err?.status || err?.code,
+    }, null, 2));
+    throw err;
   }
-
-  // 3. Inject standard FormTrack identification fields (Name & Roll Number)
-  requests.push({
-    createItem: {
-      item: {
-        title: 'Name',
-        description: 'Enter your Full Name as registered',
-        questionItem: {
-          question: {
-            required: true,
-            textQuestion: { paragraph: false }
-          }
-        }
-      },
-      location: { index: 0 }
-    }
-  });
-
-  requests.push({
-    createItem: {
-      item: {
-        title: 'Roll Number',
-        description: 'Enter your Roll Number exactly as registered',
-        questionItem: {
-          question: {
-            required: true,
-            textQuestion: { paragraph: false }
-          }
-        }
-      },
-      location: { index: 1 }
-    }
-  });
-
-  // 4. Map and add all user/AI generated questions
-  validQuestions.forEach((q, i) => {
-    requests.push(buildQuestionRequest(q, i + 2));
-  });
-
-  // 5. Execute batch update to build the form items
-  await forms.forms.batchUpdate({
-    formId,
-    requestBody: { requests }
-  });
-
-  return {
-    url: `https://docs.google.com/forms/d/${formId}/viewform`,
-    id: formId
-  };
 };
 
-/**
- * Pre-defined template for Internship tracking.
- */
 const generateInternshipForm = async (teacherName, subject) => {
   return generateCustomForm(
     `Internship Status - ${subject}`,
