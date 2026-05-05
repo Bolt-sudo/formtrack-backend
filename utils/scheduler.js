@@ -91,9 +91,8 @@ const warnedKeys = new Set();
 
 const syncGoogleFormResponses = async () => {
   try {
-    const authClient = await auth.getClient();
-    const formsApi = google.forms({ version: 'v1', auth: authClient });
-
+    // NEW - uses OAuth2
+const formsApi = google.forms({ version: 'v1', auth });
     const activeForms = await Form.find({
       isActive: true,
       googleFormId: { $exists: true, $ne: null }
