@@ -91,13 +91,11 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
   }
 
   try {
-    const authClient = await auth.getClient();
-    
-    // Force token refresh to ensure valid credentials
-    await authClient.getAccessToken();
-    console.log('✅ Auth client ready, creating form...');
+    // Force token refresh
+    await auth.getAccessToken();
+    console.log('✅ OAuth2 token ready, creating form...');
 
-    const forms = google.forms({ version: 'v1', auth: authClient });
+    const forms = google.forms({ version: 'v1', auth });
 
     // 1. Create the form
     let newForm;
