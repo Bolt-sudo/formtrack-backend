@@ -91,13 +91,11 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
   }
 
   try {
-    // Force token refresh
     await auth.getAccessToken();
     console.log('✅ OAuth2 token ready, creating form...');
 
     const forms = google.forms({ version: 'v1', auth });
 
-    // 1. Create the form
     let newForm;
     try {
       newForm = await forms.forms.create({
@@ -117,7 +115,6 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
     const formId = newForm.data.formId;
     const requests = [];
 
-    // 2. Add description
     if (formDescription) {
       requests.push({
         updateFormInfo: {
@@ -127,7 +124,6 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
       });
     }
 
-    // 3. Add Name and Roll Number fields
     requests.push({
       createItem: {
         item: {
@@ -160,12 +156,10 @@ const generateCustomForm = async (formTitle, formDescription, teacherName, quest
       }
     });
 
-    // 4. Add questions
     validQuestions.forEach((q, i) => {
       requests.push(buildQuestionRequest(q, i + 2));
     });
 
-    // 5. Batch update
     try {
       await forms.forms.batchUpdate({
         formId,
