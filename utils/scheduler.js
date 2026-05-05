@@ -1,4 +1,6 @@
 const cron = require('node-cron');
+const https = require('https');
+const http = require('http');
 const { google } = require('googleapis');
 const auth = require('../config/googleauth');
 const Form = require('../models/Form');
@@ -7,8 +9,27 @@ const User = require('../models/User');
 const { sendReminderToStudents, applyMissedPenalties } = require('./notificationService');
 const { computeWeeklyLeaderboard } = require('./leaderboardService');
 
+// ── Self-ping to keep Render free tier awake ─────────────────
+const keepAlive = () => {
+  const url = process.env.BACKEND_URL || 'http://localhost:5000';
+  const protocol = url.startsWith('https') ? https : http;
+
+  protocol.get(`${url}/api/ping`, (res) => {
+    console.log(`[KEEP-ALIVE] ✅ Ping sent - status: ${res.statusCode} - ${new Date().toISOString()}`);
+  }).on('error', (err) => {
+    console.error('[KEEP-ALIVE] ❌ Ping failed:', err.message);
+  });
+};
+
 const startScheduler = () => {
   console.log('Starting FormTrack cron scheduler...');
+
+  // ── Keep-alive ping: every 10 minutes ────────────────────────
+  // Prevents Render free tier from sleeping (spins down after 15min)
+  cron.schedule('*/10 * * * *', () => {
+    console.log('[KEEP-ALIVE] Sending self-ping to stay awake...');
+    keepAlive();
+  });
 
   // ── Reminder job: every minute ───────────────────────────────
   cron.schedule('* * * * *', async () => {
@@ -57,6 +78,7 @@ const startScheduler = () => {
   })();
 
   console.log('✅ Cron jobs scheduled:');
+  console.log('   • Keep-alive   — every 10 minutes (prevents Render sleep)');
   console.log('   • Reminders    — every 1 minute');
   console.log('   • Penalties    — daily at midnight');
   console.log('   • Leaderboard  — every Monday at 12:01 AM');
@@ -157,7 +179,6 @@ const syncGoogleFormResponses = async () => {
           }
 
           if (!student) {
-            // Only warn once per unique roll+name combo to avoid log spam
             const warnKey = `${rollNumber}-${studentName}`;
             if (!warnedKeys.has(warnKey)) {
               console.log(`[SYNC] ⚠️ No student found - Roll: "${rollNumber}", Name: "${studentName}"`);

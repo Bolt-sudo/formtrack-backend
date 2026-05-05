@@ -53,9 +53,11 @@ app.use('/api/students',      require('./routes/students'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/fines',         require('./routes/fines'));
 app.use('/api/leaderboard',   require('./routes/leaderboard'));
-app.use('/api/ai',            require('./routes/aiRoutes'));  
+app.use('/api/ai',            require('./routes/aiRoutes'));
 
+// ── Health check + keep-alive ping endpoint ───────────────────
 app.get('/', (req, res) => res.json({ message: 'FormTrack API running', version: '1.0.0' }));
+app.get('/api/ping', (req, res) => res.json({ success: true, message: 'pong', time: new Date().toISOString() }));
 
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
