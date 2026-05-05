@@ -22,8 +22,8 @@ router.post('/generate-questions', protect, async (req, res) => {
           },
           {
             role: 'user',
-            content: `Generate ${questionCount} college-level questions for a ${subject || 'General'} form about "${topic}". 
-            
+            content: `Generate ${questionCount} college-level questions for a ${subject || 'General'} form about "${topic}".
+
 Return exactly this format:
 {
   "questions": [
@@ -31,16 +31,23 @@ Return exactly this format:
       "title": "Question text?",
       "type": "radio",
       "options": ["Option 1", "Option 2", "Option 3", "Option 4"],
+      "correctAnswer": 2,
       "required": true
     },
     {
       "title": "Short answer question?",
       "type": "text",
       "options": [],
+      "correctAnswer": null,
       "required": true
     }
   ]
-}`
+}
+
+Rules:
+- For "radio", "checkbox", or "dropdown" type questions, always include 4 options and set "correctAnswer" to the index (0-3) of the correct option.
+- For "text" or "paragraph" type questions, set "correctAnswer" to null.
+- Make sure the correct answers are factually accurate.`
           }
         ],
         response_format: { type: 'json_object' }
