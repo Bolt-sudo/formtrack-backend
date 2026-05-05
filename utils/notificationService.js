@@ -1,35 +1,16 @@
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const Submission = require('../models/Submission');
 
-const createTransporter = () => {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS
-    }
+const sendEmail = async ({ to, subject, html }) => {
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  await resend.emails.send({
+    from: 'FormTrack <onboarding@resend.dev>',
+    to,
+    subject,
+    html
   });
-};
-
-const sendEmail = async ({ to, subject, html }, retries = 3, delay = 2000) => {
-  const transporter = createTransporter();
-  for (let i = 0; i < retries; i++) {
-    try {
-      await transporter.sendMail({
-        from: `"FormTrack" <${process.env.EMAIL_USER}>`,
-        to,
-        subject,
-        html
-      });
-      return; // ✅ success, stop retrying
-    } catch (err) {
-      if (i === retries - 1) throw err; // last attempt, give up
-      console.log(`⚠️ Email failed for ${to}, retrying (${i + 2}/${retries})...`);
-      await new Promise(res => setTimeout(res, delay));
-    }
-  }
 };
 
 const sendSMS = async ({ to, message }) => {
@@ -110,7 +91,7 @@ const buildEmailHTML = ({ studentName, formTitle, subject, deadline, daysLeft, t
           ${deadline ? `<p style="color: #888; font-size: 13px;">Deadline: <strong>${new Date(deadline).toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'long', day:'numeric' })}</strong></p>` : ''}
           ${fineBlock}
           <div style="margin-top: 20px; padding: 12px 16px; background: #f9f9f9; border-radius: 8px; font-size: 13px; color: #666;">
-            Please log in to FormTrack to view your fine and submission details.
+            Please log in to FormTrack to view your submission details.
           </div>
         </div>
         <div style="padding: 12px 30px; background: #f9f9f9; font-size: 12px; color: #aaa; text-align: center;">
@@ -169,6 +150,7 @@ const sendNotification = async ({ recipient, form, type, channel, subject, messa
           fine
         });
         await sendEmail({ to: recipient.email, subject, html });
+        console.log(`✅ Email sent to ${recipient.email}`);
       }
 
       if (channel === 'sms' && recipient.notificationPreferences?.sms && recipient.phone) {
@@ -236,15 +218,10 @@ const sendReminderToStudents = async (form, students, triggerType = 'auto') => {
   console.log(`✅ [${triggerType}] Sent ${type} reminders to ${students.length} students for: "${form.title}"`);
 };
 
-/**
- * ✅ FIX: Now also creates a missed fine for each student who never submitted.
- */
 const applyMissedPenalties = async (form, students) => {
-  
-  const { createMissedFine } = require('./fineService'); // ✅ NEW
+  const { createMissedFine } = require('./fineService');
 
   const promises = students.map(async (student) => {
-    // ✅ FIX: upsert:true creates a missed record even if no submission doc existed
     await Submission.findOneAndUpdate(
       { form: form._id, student: student._id, status: { $in: ['pending'] } },
       {
@@ -258,7 +235,6 @@ const applyMissedPenalties = async (form, students) => {
       $inc: { internalMarks: -form.missedPenalty }
     });
 
-    // ✅ NEW: Create a flat fine for missed deadline
     let fine = null;
     try {
       fine = await createMissedFine(student._id, form._id, form.deadline);
@@ -276,7 +252,7 @@ const applyMissedPenalties = async (form, students) => {
       subject: `❌ Missed deadline: "${form.title}" – Penalty applied`,
       message: `You missed the deadline for ${form.title}. ${form.missedPenalty} mark(s) deducted.${fineText}`,
       marksInfo: `-${form.missedPenalty}`,
-      fine // ✅ pass fine to email builder
+      fine
     });
 
     if (student.phone) {
@@ -286,7 +262,7 @@ const applyMissedPenalties = async (form, students) => {
         subject: form.subject,
         type: 'warning',
         marksInfo: `-${form.missedPenalty}`,
-        fine // ✅ pass fine to WhatsApp builder
+        fine
       });
       await sendNotification({
         recipient: student,
